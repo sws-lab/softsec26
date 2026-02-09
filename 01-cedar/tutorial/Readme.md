@@ -1,6 +1,6 @@
 # Cedar Tutorial Exercises
 
-This repository contains a series of exercises from [the Cedar Policy tutorial](https://www.cedarpolicy.com/en/tutorial), adapted for running with cedar-py. The instructions are on [the course website](https://courses.cs.ut.ee/2025/softsec/spring/Main/Cedar).
+This repository contains a series of exercises from [the Cedar Policy tutorial](https://www.cedarpolicy.com/en/tutorial), adapted for running with cedar-py. The instructions are on [the course website](https://courses.cs.ut.ee/2026/softsec/spring/Main/Cedar).
 
 ## Exercises
 
