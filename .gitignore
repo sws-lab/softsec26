@@ -26,3 +26,6 @@ build/
 instance/
 uploads/
 *.egg-info/
+
+# Specific
+02-dafny/lab
