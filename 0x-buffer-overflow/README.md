@@ -1,115 +1,193 @@
 # Buffer overflows
 
-The provided file `naive.c` contains simple (and problematic) implementation of
-a program granting access based on password which it prompts from the user.
+This tutorial uses a deliberately unsafe password checker to illustrate how a
+buffer overflow can be
 
-**NOTE:** in parallel to working through the next few sections, run `podman
-build -t bufover -f Dockerfile .` (you may replace `podman` with `docker`) to
-build the environment for fuzzing section.
+1. found by manual inspection,
+2. detected by runtime tooling,
+3. rediscovered by fuzzing, and
+4. exposed by symbolic analysis.
 
-On Linux (you may use provided `Dockerfile` environment if you have it ready,
-but this is not required), you can compile and run the program as follows:
+The main example is [`naive.c`](./naive.c). The later files
+[`sneaky.c`](./sneaky.c) and [`symbolic.c`](./symbolic.c) reuse the same core
+idea with small changes to show the strengths and weaknesses of different
+analysis techniques.
+
+Run the commands below from the `0x-buffer-overflow` directory.
+
+**Note:** the `Dockerfile` is only needed for the fuzzing and symbolic-analysis
+sections. You can start building it in parallel while working through the first
+parts:
+
+```bash
+podman build -t bufover -f Dockerfile .
+```
+
+You may replace `podman` with `docker`.
+
+## Manual discovery
+
+On Linux, you can compile and run the vulnerable program as follows:
+
 ```bash
 cc -O2 naive.c -o naive -g # Tested with gcc 14.2.0 and clang 22
 echo -n qwerty1 > password.txt # Max 7 characters
 ./naive
 ```
-You may run the program and make sure that (naively) alternative passwords do
-not grant the access.
 
-However, the program is problematic in many respects, and in particular it
-contains infamous buffer overflow vulnerability. To discover the vulnerability,
-carefully inspect the source code. Consider which memory writes are performed by
-the program, to which variables, whether the memory writes always stay in bounds
-of their respective variables, and how these variables could be placed in memory
-relative to each other. Ultimately, the goal would be finding the memory write
-that inadvertently permits writes into the wrong variable under certain
-conditions. Equipped with this, consider which inputs provided by the user may
-trick the program to write into the wrong variable, and how this could be
-exploited to gain access without knowing the contents of `password.txt` or
-modifying program text.
+First, confirm the intended behavior: the correct password grants access and an
+incorrect password does not.
+
+Then inspect [`naive.c`](./naive.c) carefully. The key questions are:
+
+- Which function writes user-controlled bytes into memory? Which memory?
+- What stops that function from writing more bytes?
+- Does it check how large the destination buffer is?
+- How string buffers might be stored relative to each other?
+- What happens if the program writes input outside of destination buffer bounds?
+- Can one exploit this behavior to manipulate the program state?
+- Which input might be suitable for such manipulation to grant unauthorized
+  access?
+
+Two important caveats:
+
+- This behavior is still undefined behavior in C. Once the overflow happens, the
+  language standard makes no guarantees.
+- The exercise relies on a memory layout that is common with the tested
+  toolchains, but not guaranteed by the C standard.
 
 ## Automatic discovery
 
-The modern compilers provide certain assistance in finding such class of bugs.
-You may compile the program as follows:
+Modern compilers can instrument programs to catch many memory errors at runtime.
+Compile the same program with AddressSanitizer:
+
 ```bash
 cc -O2 naive.c -o sanitized -g -fsanitize=address # Tested with gcc 14.2.0 and clang 22
 ./sanitized
 ```
-You may run the sanitized version and attempt to gain access, both using
-legitimate password and the technique you discovered previously. In the latter
-case, observe error trace printed by the program. Read the trace and correlate
-with your understanding of the issue gained previously.
 
-Can you modify the program to trick the sanitizer, bypassing these checks to
-still admit problematic inputs? See below.
+Try two kinds of input:
+
+- the legitimate password,
+- the input that triggered the bug during manual exploration.
+
+When the overflow occurs, AddressSanitizer should abort the program and print a
+report. Read that report closely:
+
+- Which memory access failed?
+- In which function did the invalid write occur?
+- Which variable was overflowed?
+- How large was the object, and how far past it did the write go?
+
+This is a useful contrast with the manual analysis: before, you reasoned from
+the source to the bug; now the tool points directly at the failing access.
 
 ## Sneaky program
 
-The sneaky version demonstrates limitations of sanitizer tooling. You may compile it as follows:
+[`sneaky.c`](./sneaky.c) demonstrates a limitation of runtime sanitizers. Compile
+it as follows:
+
 ```bash
 cc -O2 sneaky.c -o sneaky -fsanitize=address -g # Tested with gcc 14.2.0 and clang 22
 ./sneaky
 ```
-Try to enter the same problematic input. Is the sanitizer triggered, or can you
-once again gain unauthorized access? Read through the `sneaky.c` and consider
-the pattern used there. This shows the limitations of runtime analysis tools for
-C, which rely on knowing certain behaviors of the program (memory allocation
-mechanism) in advance, so implementing custom memory allocator may still confuse
-the sanitizer.
+
+Use the same problematic input as before. Does the sanitizer still trigger, or
+can you once again gain unauthorized access?
+
+The important change is that string buffers are no longer separate variables.
+Instead, the program carves both objects out of one larger static pool through a
+custom allocator.
+
+That distinction matters for AddressSanitizer:
+
+- it knows the bounds of the global allocation pool,
+- but it does not automatically know the logical sub-allocation boundaries.
+
+So an overwrite from one logical object into the next may stay inside the pool
+and therefore avoid detection, even though it still corrupts program state. The
+bug has not disappeared. Only the visibility of the bug to the runtime checker
+has changed.
+
+This is the broader lesson: runtime instrumentation is powerful, but it is not
+the same as a proof of correctness. If a memory-management scheme is invisible
+to the tool, some bugs may remain invisible too.
 
 ## Fuzzing
 
-This kind of vulnerabilities can be identified in automatic manner by using
-fuzzing. Fuzzers attempt many possible inputs, randomizing and mutating them
-while observing program behaviors. Therefore, there is good probability to
-arrive at the problematic input. Combined with sanitizers that abruptly fail
-when the problem occurs, fuzzer can reasonably identify faulty programs.
+Fuzzing searches for bugs automatically by generating many inputs, mutating them,
+and observing how the target behaves. When the program crashes, hangs, or hits a
+sanitizer failure, the fuzzer keeps the interesting input for later inspection.
 
-To test fuzzing, you should use the provided `Dockerfile`
+For this part, use the provided container environment:
+
 ```bash
-podman build -t bufover -f Dockerfile . # you may replace podman with docker
+podman build -t bufover -f Dockerfile .
 podman run --rm -it bufover
 ```
-In the container, run
+
+Inside the container, run:
+
 ```bash
 echo -n qwerty1 > password.txt # Max 7 characters
-mkdir in
-cp password.txt in
+mkdir -p in
+cp password.txt in/
 
 afl-clang-lto -O2 naive.c -o naive
 afl-fuzz -i in -o out-naive -- ./naive
 ```
 
-Inspect the user interface of
-[AFL++](https://github.com/AFLplusplus/AFLplusplus) fuzzer. Once it finds some
-crashes -- this should happen very quickly -- you may terminate it with ctrl+c.
+The `in/` directory is the initial seed corpus. We start with a valid password
+well-formed input to mutate, providing starting point to
+[AFL++](https://github.com/AFLplusplus/AFLplusplus).
 
-Problematic inputs found by the fuzzer are located in
-`out-naive/default/crashes` directory. You may run the program with these inputs:
+Inspect the AFL++ interface while it runs. On this example, crashes should
+appear quickly. Once that happens, terminate the fuzzer with `Ctrl+C`.
+
+Interesting inputs are stored under `out-naive/default/crashes`. A convenient
+way to replay one of them is:
+
 ```bash
-./naive < out-naive/default/crashes/id\:000000\,sig\:06\,src\:000000\,time\:147\,execs\:200\,op\:havoc\,rep\:2 # File name will be different. Adjust!
+CRASH=$(find out-naive/default/crashes -type f ! -name README.txt | head -n 1)
+./naive < "$CRASH"
 ```
-You may also inspect particular inputs, however not all of them will be in printable form:
+
+You can inspect the bytes in the crashing input with:
+
 ```bash
-xxd out-naive/default/crashes/id\:000000\,sig\:06\,src\:000000\,time\:147\,execs\:200\,op\:havoc\,rep\:2
+xxd "$CRASH"
 ```
+
+Some crash files will not be human-readable, which is normal. The useful point
+is that the fuzzer can discover a bad input without understanding the program in
+the way a human does.
 
 ## Symbolic analysis
 
-Finally, you may try using symbolic analysis to find the issue. For this
-purpose, `symbolic.c` variant is prepared -- it is equivalent to the original
-naive program except for password reading function. Inspect the source code to
-make sure you understand the changes.
+Finally, try symbolic analysis. For this part, use [`symbolic.c`](./symbolic.c)
+instead of `naive.c`.
 
-You should use the same container environment as in the fuzzing case:
+The structure of the program is the same, but the input routine is different:
+instead of reading concrete bytes with `fgetc`, it asks the verifier for
+nondeterministic values. This lets the analyzer reason about many possible inputs
+at once.
+
+Use the same container environment as in the fuzzing section and run:
+
 ```bash
-symbiotic  --prp=memsafety --search-include-paths --witness=witness.yml --exit-on-error  symbolic.c
+symbiotic --prp=memsafety --search-include-paths --witness=witness.yml --exit-on-error symbolic.c
 ```
-The analyzer should finish relatively quickly, reporting an error. It encodes
-possible path to the fault in a form of a witness `witness.yml`. Read the
-`witness.yml` file -- it contains a sequence of waypoints that show certain
-program execution states that lead to the problem. Look at waypoint locations,
-correlate these with the source code. What does the symbolic analyzer
-communicate?
+
+The analyzer should finish relatively quickly and report a memory-safety error.
+It also writes a witness to `witness.yml`.
+
+Read that witness as a compact explanation of one path to failure:
+
+- waypoint locations tell you which source lines matter,
+- state information shows how execution reaches the fault,
+- the final step corresponds to the out-of-bounds write.
+
+One subtle but important point: the analyzer is proving a memory-safety problem,
+not directly "unauthorized access." The witness shows how execution can reach the
+unsafe write, and from there you can connect the result back to the exploit
+behavior you observed earlier.
