@@ -31,7 +31,7 @@ make
 ```
 
 This runs the default `all` target, which performs the plain run, witness
-validation, witness injection, and injected run.
+generation, witness validation, witness injection, and injected run.
 
 ## Apple Silicon Macs
 
@@ -66,10 +66,14 @@ make vanilla
 Generate and validate the witness:
 
 ```bash
+make witness
 make validate
 ```
 
-Inject the witness and run the instrumented program:
+`make witness` creates or overwrites `out/witness.yml`. `make validate`
+validates the existing witness without regenerating it.
+
+Inject the existing witness and run the instrumented program:
 
 ```bash
 make inject
@@ -90,8 +94,8 @@ Generated files are written to `out/`, including:
 
 ## Editing the witness
 
-After `make validate` has generated `out/witness.yml`, you can edit that file
-manually and rerun the validator:
+After `make witness` has generated `out/witness.yml`, you can edit that file
+manually and rerun the validator without regenerating the witness:
 
 ```bash
 make validate
@@ -109,6 +113,12 @@ make inject
 
 This rebuilds the injected program from the edited witness and then executes it
 with the current `ARGS` value.
+
+To throw away your edits and regenerate the witness from the program, run:
+
+```bash
+make witness
+```
 
 ## Changing the program arguments
 
