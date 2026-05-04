@@ -88,6 +88,28 @@ Generated files are written to `out/`, including:
 - `out/vanilla`: the compiled original program,
 - `out/example.injected`: the compiled injected program.
 
+## Editing the witness
+
+After `make validate` has generated `out/witness.yml`, you can edit that file
+manually and rerun the validator:
+
+```bash
+make validate
+```
+
+For example, try changing one of the invariants or assumptions in the witness.
+The goal is to see whether the validator accepts the modified witness or reports
+that it no longer matches the program.
+
+You can also run the injection step after editing the witness:
+
+```bash
+make inject
+```
+
+This rebuilds the injected program from the edited witness and then executes it
+with the current `ARGS` value.
+
 ## Changing the program arguments
 
 The example program expects:
