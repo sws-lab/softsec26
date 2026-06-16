@@ -1,0 +1,11 @@
+target/
+build/
+.gradle/
+.work/
+dist/
+.git/
+*.class
+answers.json
+.cifuzz-corpus/
+*Inputs/
+crash-*

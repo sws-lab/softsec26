@@ -1,0 +1,14 @@
+target/
+build/
+.gradle/
+.work/
+student_id.txt
+answers.json
+src/main/java/Oracle/__default.java
+*.class
+# Jazzer findings/corpus
+*Inputs/
+.cifuzz-corpus/
+crash-*
+# output of export-dist.sh
+dist/

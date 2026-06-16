@@ -1,0 +1,54 @@
+plugins {
+    id 'java'
+}
+
+repositories {
+    mavenCentral()
+}
+
+dependencies {
+    // Align ALL junit-platform-* jars with junit-jupiter via the junit-bom.
+    // Without it, jazzer-junit can drag in an older junit-platform-launcher and
+    // test discovery breaks.
+    testImplementation platform('org.junit:junit-bom:5.14.4')
+    testRuntimeOnly platform('org.junit:junit-bom:5.14.4')
+
+    // DafnyRuntime.jar: needed to compile OracleAdapter (dafny.DafnySequence,
+    // dafny.TypeDescriptor) and at runtime for the reflective oracle call. Put
+    // on the compile and test classpaths.
+    implementation files("${projectDir}/lib/DafnyRuntime.jar")
+
+    testImplementation 'org.junit.jupiter:junit-jupiter'
+    testImplementation 'com.code-intelligence:jazzer-junit:0.30.0'
+    testRuntimeOnly 'org.junit.platform:junit-platform-launcher'
+}
+
+// Target Java 21 bytecode while building on whatever JDK is installed (25 in
+// the container).
+tasks.withType(JavaCompile).configureEach {
+    options.release = 21
+}
+
+tasks.named('test') {
+    useJUnitPlatform()
+
+    // The fuzzer must run on every invocation: never skipped as UP-TO-DATE and
+    // never served from the build cache.
+    outputs.upToDateWhen { false }
+    outputs.cacheIf { false }
+
+    // scripts/fuzz.sh parses Jazzer's own libFuzzer output ("Done N runs ...")
+    // plus the ">>> FUZZ FINDING" and exception lines, so the test JVM's
+    // stdout/stderr and full stack traces must reach the console.
+    testLogging {
+        showStandardStreams = true
+        events = ['failed']
+        exceptionFormat = 'full'
+    }
+
+    // `./gradlew test -Pfuzz` switches Jazzer's @FuzzTest from corpus-replay
+    // into actual fuzzing for up to maxDuration per test.
+    if (project.hasProperty('fuzz')) {
+        environment 'JAZZER_FUZZ', '1'
+    }
+}
