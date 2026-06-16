@@ -7,14 +7,12 @@ personal exam token: copying someone else's answers.json cannot work.
 
 Usage:
     python3 exam.py status
-    python3 exam.py q1     # calculator: fix until `make fuzz-calc` is clean
-    python3 exam.py q2     # averages: fix until they meet the floor spec
+    python3 exam.py q1 <ExceptionA> <ExceptionB>  # calculator: the two fuzz findings
+    python3 exam.py q2     # averages: record the overflow witness from fuzzing
     python3 exam.py q3     # dafny: add invariants until `make verify` passes
     python3 exam.py q4     # search: fix until `make fuzz-search` is clean
 
-Each question records the result of running the tool on YOUR fixed code; it
-only grades as correct once the guardrail (the fuzzer or the verifier) is
-satisfied. There is nothing to record by hand.
+Each command records the relevant guardrail result or fuzzer finding.
 
 Requires: a recent JDK (javac/java), Dafny 4.x on PATH (q3), Python 3.
 """
@@ -34,6 +32,7 @@ ID_FILE = EXAM_DIR / "student_id.txt"
 EXAM_NAME = "vgd-exam"
 
 QUESTIONS = ["q1", "q2", "q3", "q4"]
+INT_MAX = 2**31 - 1
 
 SRC = EXAM_DIR / "src" / "main" / "java"
 DRIVERS = EXAM_DIR / "drivers"
@@ -79,9 +78,11 @@ def load_answers(sid):
     return {"exam": EXAM_NAME, "id_fingerprint": fp, "answers": {}}
 
 
-def record(sid, qid, canonical):
+def record(sid, qid, canonical, evidence=None):
     data = load_answers(sid)
     data["answers"][qid] = answer_hash(sid, qid, canonical)
+    if evidence is not None:
+        data.setdefault("evidence", {})[qid] = evidence
     ANSWERS_FILE.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
     print(f"recorded {qid} -> {data['answers'][qid]}")
 
@@ -126,53 +127,96 @@ def run_driver(classes, main_class, sid, classpath_extra=None):
 
 # ---------------------------------------------------------------- questions
 
+def simple_exception_name(name):
+    name = name.strip()
+    if not name:
+        fail("empty exception name.")
+    simple = name.rsplit(".", 1)[-1]
+    if not re.fullmatch(r"[A-Za-z_$][A-Za-z0-9_$]*", simple):
+        fail(f"invalid exception class name: {name}")
+    return simple
+
+
 def q1(sid, args):
-    # Part A -- the calculator, fixed until `make fuzz-calc` is clean.
-    classes = compile_java("q1", sorted((SRC / "calc").glob("*.java")) + [
-        DRIVERS / "Derive.java",
-        DRIVERS / "CalcFingerprint.java",
-    ])
-    vector = run_driver(classes, "exam.CalcFingerprint", sid)
-    if "EXC:" in vector:
-        print("warning: your calculator still lets an exception other than"
-              " CalcException escape, so this will not grade as correct. Keep"
-              " fixing until a full `make fuzz-calc` run finds nothing, then"
-              " record again.")
-    record(sid, "q1", vector)
+    # Part A -- record the two exception classes the calculator fuzzer found.
+    if len(args) != 2:
+        fail(
+            "q1 needs the two exception class names reported by fuzzing.\n"
+            "Example: python3 exam.py q1 FirstException SecondException"
+        )
+    names = sorted(simple_exception_name(arg) for arg in args)
+    if len(set(names)) != 2:
+        fail("q1 needs two distinct exception class names.")
+    canonical = "calc-exceptions:" + ",".join(names)
+    record(sid, "q1", canonical)
+
+
+AVERAGE_FINDING_RE = re.compile(
+    r"disagreement:\s*average1\((-?\d+),\s*(-?\d+)\)\s*=\s*(-?\d+)"
+    r"\s+but\s+average2\((-?\d+),\s*(-?\d+)\)\s*=\s*(-?\d+)"
+)
+
+
+def java_int(x):
+    x &= 0xFFFFFFFF
+    return x - 0x100000000 if x >= 0x80000000 else x
+
+
+def java_div2(x):
+    q = abs(x) // 2
+    return q if x >= 0 else -q
+
+
+def average_witnesses(text):
+    for m in AVERAGE_FINDING_RE.finditer(text):
+        a1, b1, r1, a2, b2, r2 = (int(g) for g in m.groups())
+        if a1 == a2 and b1 == b2:
+            yield a1, b1, r1, r2
+
+
+def valid_average_overflow_witness(a, b, r1, r2):
+    if a < 0 or b < 0:
+        return False
+    if a > INT_MAX or b > INT_MAX:
+        return False
+    ref = (a + b) // 2
+    buggy = java_div2(java_int(a + b))
+    return a + b > INT_MAX and r1 == ref and r2 == buggy and r1 != r2
 
 
 def q2(sid, args):
-    # Part B -- both averages, fixed until they meet the floor spec.
-    classes = compile_java("q2", sorted((SRC / "average").glob("*.java")) + [
-        DRIVERS / "Derive.java",
-        DRIVERS / "AverageFingerprint.java",
-    ])
-    # The driver prints "i:avg1=avg2=floorReference" per case.
-    raw = run_driver(classes, "exam.AverageFingerprint", sid)
-    canon = []
-    disagree = 0
-    spec_violation = 0
-    for ln in raw.splitlines():
-        idx, rest = ln.split(":", 1)
-        a1, a2, ref = rest.split("=")
-        canon.append(f"{idx}:{a1}={a2}")
-        if a1 != a2:
-            disagree += 1
-        elif a1 != ref:
-            spec_violation += 1
-    total = len(canon)
-    if disagree:
-        print(f"warning: average2 still DISAGREES with the average1 reference on"
-              f" {disagree} of {total} cases. Make the efficient average2 match"
-              f" the reference before recording.")
-    if spec_violation:
-        print(f"warning: average1 and average2 agree with each other but do NOT"
-              f" match the floor specification on {spec_violation} of {total}"
-              f" cases (floor rounds toward negative infinity; e.g. the average"
-              f" of -7 and 0 is -4, not -3). You appear to have changed the"
-              f" reference -- leave average1 as 64-bit floorDiv and only fix"
-              f" average2.")
-    record(sid, "q2", "\n".join(canon))
+    # Part B -- record a concrete non-negative overflow witness found by Jazzer.
+    if args:
+        paths = [Path(p) for p in args]
+    else:
+        paths = [
+            WORK_DIR / "fuzz" / "average.finding",
+            WORK_DIR / "fuzz" / "average.log",
+        ]
+
+    checked = []
+    for path in paths:
+        checked.append(str(path))
+        if not path.exists():
+            continue
+        text = path.read_text(encoding="utf-8", errors="replace")
+        for a, b, r1, r2 in average_witnesses(text):
+            if not valid_average_overflow_witness(a, b, r1, r2):
+                continue
+            canonical = (
+                f"overflow-witness:a={a},b={b},average1={r1},average2={r2}"
+            )
+            print(f"average overflow witness: a={a}, b={b}, "
+                  f"average1={r1}, average2={r2}")
+            record(sid, "q2", canonical, evidence=canonical)
+            return
+
+    fail(
+        "no valid non-negative average overflow witness found.\n"
+        "Run `make fuzz-average` on the broken average implementation, then"
+        " rerun `python3 exam.py q2`.\n"
+        "Checked: " + ", ".join(checked)
+    )
 
 
 def q3(sid, args):
@@ -204,9 +248,10 @@ def q4(sid, args):
     if not oracle_java.exists():
         fail(
             "generated oracle not found.\n"
-            "Run `make fuzz-search` after completing Q3; it first runs"
-            " `make oracle`, which verifies dafny/BinarySearch.dfy and"
-            " generates src/main/java/Oracle/__default.java."
+            "Run `make fuzz-search`; it first runs `make oracle`, which"
+            " translates dafny/BinarySearch.dfy and generates"
+            " src/main/java/Oracle/__default.java. (This does not require the"
+            " Part C proof to verify -- the model's behavior is already there.)"
         )
     classes = compile_java(
         "q4",
@@ -233,7 +278,13 @@ def status(sid, args):
         print("all questions answered; upload answers.json to Moodle.")
 
 
-COMMANDS = {"status": status, "q1": q1, "q2": q2, "q3": q3, "q4": q4}
+COMMANDS = {
+    "status": status,
+    "q1": q1,
+    "q2": q2,
+    "q3": q3,
+    "q4": q4,
+}
 
 
 def main():

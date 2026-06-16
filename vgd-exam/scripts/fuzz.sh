@@ -10,6 +10,7 @@ name="$1"
 test_class="$2"
 log_dir=".work/fuzz"
 log="$log_dir/${name}.log"
+finding="$log_dir/${name}.finding"
 
 mkdir -p "$log_dir"
 rm -f "$log"
@@ -36,7 +37,7 @@ echo
 # Gradle indents test output and reports a finding as a bare exception line
 # (the "Caused by:" sits on its own line), so we match a whitespace-stripped
 # copy of each line and accept the exception with or without that prefix.
-awk '
+summary="$(awk '
   { t = $0; sub(/^[[:space:]]+/, "", t) }
   t ~ /^>>> FUZZ FINDING/ && !finding {
     print t
@@ -60,9 +61,12 @@ awk '
       exit 1
     }
   }
-' "$log"
+' "$log")"
+awk_rc="$?"
 
-if [ "$?" -ne 0 ]; then
+if [ "$awk_rc" -eq 0 ]; then
+  printf '%s\n' "$summary" | tee "$finding"
+else
   echo "No concise finding was recognized; last log lines:"
   tail -n 25 "$log"
 fi

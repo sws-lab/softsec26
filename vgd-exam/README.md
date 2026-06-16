@@ -1,8 +1,11 @@
 # Verification-Guided Development: Capstone Exam
 
 This exam has four parts. Each part gives you a small broken program and a
-mechanical check: a fuzzer, a differential test, or a verifier. Your task is to
-fix the program until the check passes, then record the answer with `exam.py`.
+mechanical check: a fuzzer, a differential test, or a verifier. In the first two
+parts you use the check to *find* the mistake and record what it reveals — you
+are not asked to hand in a corrected program. In the last two you prove a
+property and then use the proven model to drive a fix. You record every answer
+with `exam.py`.
 
 The parts cover four related techniques:
 
@@ -14,12 +17,12 @@ The parts cover four related techniques:
 | Formal verification | a stated property for all inputs | requires a precise specification and proof work |
 
 The examples focus on the kinds of edge cases that often matter in secure
-software: malformed input, integer overflow, and boundary conditions. 
-The final part combines the last three techniques: a verified Dafny
-implementation is translated to Java and used as an oracle in a fuzz test
-against a hand-written Java implementation. 
-This is the verification-guided development pattern used in systems such as Cedar:
-prove a small model, then test production code against that model on generated inputs.
+software: malformed input, integer overflow, and boundary conditions. The final
+part combines the last three techniques: a verified Dafny implementation is
+translated to Java and used as an oracle in a fuzz test against a hand-written
+Java implementation. This is the verification-guided development pattern used in
+systems such as Cedar: prove a small model, then test production code against
+that model on generated inputs.
 
 **Solving this with AI.** This exam can be solved manually or with an AI coding
 agent; optional prompt suggestions are included. Either way, the guardrails
@@ -31,12 +34,15 @@ does not weaken the specification, tests, or oracle.
 
 ## Grading Model
 
-There are four questions, one per part. A question only grades as correct after
-the corresponding guardrail is satisfied.
+There are four questions, one per part. Parts A and B record only the finding
+the check exposes — an exception class name, an overflow witness. Part C records
+the verifier's verdict. Part D records your fixed search compared against a
+verified oracle.
 
-`exam.py` writes hashes to `answers.json`, not raw answers. The hashes are bound
-to your personal exam token from Moodle, and the generated test inputs are also
-derived from that token. Copying another `answers.json` will not work.
+`exam.py` writes hashes to `answers.json`; the average overflow question also
+stores the raw witness so the grader can validate it. The hashes are bound to
+your personal exam token from Moodle, and the Part D test inputs are also derived
+from that token. Copying another `answers.json` will not work.
 
 ## Setup
 
@@ -87,11 +93,8 @@ eval("(1+2)*3") == 9
 
 Expression parsers are typical security-sensitive input handlers: they accept
 attacker-controlled strings and must behave predictably on malformed input.
-The parser already rejects malformed syntax with `CalcException`. The required
-contract is broader:
-
-> For every input string, `eval` either returns a value or throws
-> `CalcException`. No other exception may escape.
+The parser already rejects malformed syntax with `CalcException`, but there
+other things that can go wrong, so let's see if a fuzzer can find them.
 
 Run:
 
@@ -100,31 +103,22 @@ make fuzz-calc
 ```
 
 The fuzzer generates calculator inputs and treats any exception other than
-`CalcException` as a finding. What is interesting about this, if you look 
-at the testing code in [`src/test/java/calc/CalculatorFuzzTest.java`](src/test/java/calc/CalculatorFuzzTest.java)
-is that we do not provide it the grammar for expressions; instead, it discovers
-the structure by just mutating inputs to increase coverage.
+`CalcException` as a finding. Notably, the test in
+[`src/test/java/calc/CalculatorFuzzTest.java`](src/test/java/calc/CalculatorFuzzTest.java)
+gives the fuzzer no grammar for expressions; it discovers the structure on its
+own by mutating inputs to increase coverage.
 
-It will usually find one issue quickly. Fix that class of issue, then rerun the fuzzer.
-Do not change the grammar or the arithmetic semantics. Add checks that turn the
-bad cases into `CalcException`.
-
-When a full run reports no findings, record Q1:
+It will usually find one issue quickly. Note the exception class, then guard
+that case; that is, add a `catch` for the first exception and throw `CalcException` instead. Then, run the fuzzer again to find the next exception.
+Record both exception names as Q1:
 
 ```sh
-python3 exam.py q1
+python3 exam.py q1 FirstException SecondException
 ```
 
-`exam.py q1` evaluates 24 token-derived expressions. Valid expressions must
-produce the correct value; invalid ones must fail with exactly `CalcException`.
+Use the actual exception class names printed by the fuzzer. You may pass either
+simple names or fully qualified names; `exam.py` records the simple class names.
 
-Optional agent prompt:
-
-> In `src/main/java/calc/Calculator.java`, `eval()` must either return a value
-> or throw `calc.CalcException` for every input. No other exception may escape.
-> Run `make fuzz-calc`, fix the reported input class by adding a guard, and
-> rerun until a full 30-second fuzz run reports no findings. Do not change the
-> grammar or arithmetic semantics.
 
 ## Part B: Differential Testing
 
@@ -141,9 +135,9 @@ static int average2(int a, int b) {
 }
 ```
 
-`average1` is the reference: it widens to `long`, so the sum cannot overflow,
-and it floors the result. `average2` is the common 32-bit attempt, but it is
-wrong for overflow and for negative odd sums.
+`average1` is the reference: it widens to `long`, so the sum cannot overflow.
+`average2` is the common 32-bit attempt, but it is wrong when the non-negative
+sum overflows.
 
 Integer overflow is security-relevant when the value is later used as an index,
 length, allocation size, or bounds check. Many divide-and-conquer algorithms use
@@ -157,38 +151,32 @@ Run:
 make fuzz-average
 ```
 
-The fuzzer supplies pairs of integers and the test asserts that the two methods
-agree. A disagreement proves at least one implementation is wrong. Here
-`average1` is the trusted reference, so fix `average2`.
+The fuzzer supplies pairs of integers. The test treats negative inputs as
+outside the precondition, and asserts that the two methods agree on the
+remaining non-negative pairs. A disagreement proves at least one implementation
+is wrong. Here `average1` is the trusted reference.
 
 Required behavior:
 
-> Both methods return the floor of `(a + b) / 2` over mathematical integers, for
-> all Java `int` inputs.
+> Precondition: `a >= 0 && b >= 0`.
+>
+> Both methods return `floor((a + b) / 2)` over mathematical integers.
 
-Use only 32-bit `int` arithmetic in `average2`. The standard expression is:
-
-```java
-(a & b) + ((a ^ b) >> 1)
-```
-
-Leave `average1` unchanged. When the fuzzer is clean, record Q2:
+When `make fuzz-average` reports a finding, record the overflow witness:
 
 ```sh
 python3 exam.py q2
 ```
 
-`exam.py q2` also checks the result against the floor specification, so changing
-`average1` to match a wrong `average2` will be caught here.
-But in a pure differential testing setting, an AI agent can change `average1` 
-to match a wrong `average2`, and the fuzzer will not report it.
-We have to be careful about trusting the reference implementation.
+`exam.py q2` reads `.work/fuzz/average.finding` or `.work/fuzz/average.log` and
+only records a valid non-negative pair where the naive Java `int` sum overflows.
+That witness is the graded answer for Part B.
 
-Optional agent prompt:
+If you want to confirm you have pinned down the bug, replace `average2` with the
+standard non-overflowing `(a & b) + ((a ^ b) >> 1)`, leave `average1` alone, and
+rerun `make fuzz-average`: it should now go the full duration with no findings.
+This is optional and not recorded.
 
-> In `src/main/java/average/Average.java`, leave `average1` unchanged. Rewrite
-> `average2` so it returns `floor((a + b) / 2)` for all `int` inputs using only
-> 32-bit `int` arithmetic. Run `make fuzz-average` until it reports no findings.
 
 ## Part C: Verification
 
@@ -230,12 +218,10 @@ python3 exam.py q3
 
 The expected clean result is `4 verified, 0 errors`.
 
-Optional agent prompt:
-
-> In `dafny/BinarySearch.dfy`, add the two missing loop invariants at the TODO:
-> all indices below `lo` are below `key`, and all indices from `hi` onward are
-> at least `key`. Do not edit `BinarySearch.verify.dfy` and do not use `assume`.
-> Run `make verify` until Dafny reports no errors.
+Part D reuses this binary search as a trusted oracle. Because the method body is
+already complete, that oracle is generated regardless of whether your proof goes
+through, so even if you get stuck on the invariants here, you can still attempt
+Part D.
 
 ## Part D: Verification-Guided Development
 
@@ -265,9 +251,11 @@ Run:
 make fuzz-search
 ```
 
-This target first runs `make oracle`, which verifies `BinarySearch.dfy` and
-generates `src/main/java/Oracle/__default.java`. Q3 must verify before Q4 can
-run.
+This target first runs `make oracle`, which translates `BinarySearch.dfy` to
+`src/main/java/Oracle/__default.java`. Translation uses the method body, which is
+already complete, so it works even if you have not finished the Part C proof. 
+We trust the oracle because I know this model *can* be proved correct, 
+but in real workflow, the build should fail if the proof is missing.
 
 The fuzz test generates sorted arrays with frequent duplicates, calls both
 `StudentSearch.find` and the verified oracle, and compares their returned
@@ -282,13 +270,6 @@ When a full fuzz run reports no findings, record Q4:
 ```sh
 python3 exam.py q4
 ```
-
-Optional agent prompt:
-
-> In `src/main/java/search/StudentSearch.java`, `find()` must return the
-> leftmost index of `key`, or `-1` if absent. Replace the early return on a match
-> with logic that records the match and keeps searching left. Run
-> `make fuzz-search` until it reports no findings.
 
 ## Summary
 

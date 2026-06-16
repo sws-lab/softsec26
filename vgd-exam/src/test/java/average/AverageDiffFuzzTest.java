@@ -9,6 +9,9 @@ class AverageDiffFuzzTest {
     void agree(FuzzedDataProvider data) {
         int a = data.consumeInt();
         int b = data.consumeInt();
+        if (a < 0 || b < 0) {
+            return;
+        }
         int r1 = Average.average1(a, b);
         int r2 = Average.average2(a, b);
         if (r1 != r2) {

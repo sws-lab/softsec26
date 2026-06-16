@@ -11,8 +11,6 @@ import java.security.MessageDigest;
 public final class Derive {
     private Derive() {}
 
-    public static final int CALC_CASES = 24;
-    public static final int AVG_CASES = 16;
     public static final int SEARCH_CASES = 16;
 
     // 64 deterministic bytes per (token, tag, case).
@@ -32,58 +30,6 @@ public final class Derive {
 
     private static int u(byte b) {
         return b & 0xFF;
-    }
-
-    private static int int32(byte[] d, int off) {
-        return (u(d[off]) << 24) | (u(d[off + 1]) << 16) | (u(d[off + 2]) << 8) | u(d[off + 3]);
-    }
-
-    // ---- Q1: arithmetic expression for case i, fully parenthesized -------
-    // Tree grammar (cursor walks the digest): at depth 3 or when the next
-    // byte is divisible by 3, emit a literal 0..99; otherwise emit a binary
-    // node with operator "+-*/"[byte % 4]. Values stay well inside long
-    // range (at most 8 literals of at most 2 digits).
-    public static String calcExpression(String id, int i) {
-        if (i == 0) {
-            // A fixed probe case, identical for every student; the other 23
-            // are token-derived below. (Rationale in AGENTS.md, not shipped.)
-            return "99999999999999999999";
-        }
-        byte[] d = bytes64(id, "q1", i);
-        int[] cursor = {0};
-        return gen(d, cursor, 0);
-    }
-
-    private static String gen(byte[] d, int[] cursor, int depth) {
-        int b = u(d[cursor[0]++]);
-        if (depth == 3 || b % 3 == 0) {
-            return Integer.toString(u(d[cursor[0]++]) % 100);
-        }
-        char op = "+-*/".charAt(u(d[cursor[0]++]) % 4);
-        String left = gen(d, cursor, depth + 1);
-        String right = gen(d, cursor, depth + 1);
-        return "(" + left + op + right + ")";
-    }
-
-    // ---- Q2: int pair for case i ------------------------------------------
-    // Every fourth case forces near-MAX pairs (overflow in (a+b)/2), every
-    // fourth forces a near-MIN/small pair (overflow in b-a), every fourth
-    // forces small negatives (rounding direction).
-    public static int[] averagePair(String id, int i) {
-        byte[] d = bytes64(id, "q2", i);
-        int a = int32(d, 0);
-        int b = int32(d, 4);
-        if (i % 4 == 1) {
-            a = Integer.MAX_VALUE - u(d[8]) % 5;
-            b = Integer.MAX_VALUE - u(d[9]) % 5;
-        } else if (i % 4 == 2) {
-            a = Integer.MIN_VALUE + u(d[8]) % 5;
-            b = u(d[9]) % 50;
-        } else if (i % 4 == 3) {
-            a = -(u(d[8]) % 9) - 1;
-            b = u(d[9]) % 9;
-        }
-        return new int[] {a, b};
     }
 
     // ---- Q4: sorted array + key for case i --------------------------------

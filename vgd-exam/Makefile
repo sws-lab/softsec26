@@ -28,10 +28,14 @@ demo-search:
 	@javac -d target/demo src/main/java/search/StudentSearch.java
 	@java -cp target/demo search.StudentSearch
 
-# Regenerate src/main/java/Oracle/ from the Dafny source. Verification runs
-# first, so this only succeeds once the proof in dafny/BinarySearch.dfy is
-# complete.
-oracle: verify
+# Regenerate src/main/java/Oracle/ by translating the Dafny source to Java.
+# This deliberately does NOT depend on `verify`: the only thing missing from
+# dafny/BinarySearch.dfy is the loop *invariants* (proof annotations), not
+# executable code, so the translated method behaves correctly whether or not
+# Part C's proof goes through. Part C establishes that this model is
+# trustworthy; Part D only needs the model's behavior, so a student who has not
+# finished Part C can still run the differential fuzz test here.
+oracle:
 	@mkdir -p .work src/main/java/Oracle
 	@log=.work/oracle.log; \
 	echo "Generating Java oracle from the verified Dafny source"; \
